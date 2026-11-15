@@ -1,0 +1,50 @@
+# nginx in front of Synclayer with HTTPS (docker compose --profile https).
+# Certificates are read from the certbot volume: /etc/letsencrypt/live/${SL_DOMAIN}/
+# Get them once with the steps in the README ("Docker with HTTPS").
+upstream synclayer_backend {
+    server synclayer:8787;
+    keepalive 16;
+}
+
+map $http_upgrade $synclayer_conn_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${SL_DOMAIN};
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${SL_DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${SL_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${SL_DOMAIN}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:synclayer_ssl:10m;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    client_max_body_size 0;               # Synclayer enforces its own limits and quota
+
+    location / {
+        proxy_pass http://synclayer_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $synclayer_conn_upgrade;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}

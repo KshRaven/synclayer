@@ -1,0 +1,10 @@
+<resources>
+    <style name="Theme.Synclayer" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:statusBarColor">#14171c</item>
+        <item name="android:navigationBarColor">#14171c</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">@color/sl_bg</item>
+        <item name="colorPrimary">#7aa7ff</item>
+        <item name="colorAccent">#7aa7ff</item>
+    </style>
+</resources>

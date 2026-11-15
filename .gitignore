@@ -1,0 +1,53 @@
+# Byte-compiled / caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+wheels/
+*pypimgr_cache/
+.cache/
+.logs/
+
+# Secrets
+.env
+.env.*
+!.env.example
+!.env.release.example
+.pypirc
+*.pem
+*.key
+*.token
+secrets/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.zip
+*commit.txt
+*.diff
+
+# Synclayer data
+data/
+synclayer/_build_defaults.json
+*.spec
+tests/tmp/
+android/local.properties
+android/.gradle/
+android/build/
+android/app/build/

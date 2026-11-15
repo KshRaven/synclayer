@@ -1,0 +1,9 @@
+include README.md LICENSE CHANGELOG.md
+recursive-include synclayer/server/web *
+include synclayer/py.typed
+prune tests
+prune scripts
+prune android
+prune packaging
+prune docker
+global-exclude __pycache__ *.py[cod] .env*
