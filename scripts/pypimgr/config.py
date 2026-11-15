@@ -23,6 +23,15 @@ REQUIRED_FILES = (
 TOP_LEVEL_EXCLUDES = ("android", "packaging", "docker", "data")
 EXTRA_FORBIDDEN_PATHS = (r"(^|/)android/", r"(^|/)data/")
 
+# Files that end up inside the desktop apps (PyInstaller bundles) or the Android APK. A release whose changes touch
+# none of these is "PyPI only": no app builds, no GitHub release (the tag and CHANGELOG still record it).
+# Entries ending in "/" are folders. Force either way with `pypimgr release --apps` / `--no-apps`.
+APP_PATHS = (
+    "android/", "packaging/", "scripts/build.py", "requirements-gui.txt", "requirements-build.txt",
+    "synclayer/gui/", "synclayer/client/", "synclayer/common/",
+    "synclayer/theme.py", "synclayer/desktop.py", "synclayer/autostart.py", "synclayer/tui.py",
+)
+
 # Extra files that repeat the version; pypimgr updates them with the version file on every release/bump/fix.
 # Each entry is (project-relative path, regex with three groups: text before, the version, text after).
 VERSION_TARGETS = (

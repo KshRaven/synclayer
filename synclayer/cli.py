@@ -388,7 +388,10 @@ def cmd_service(a):
         return build_parser().parse_args(["service", "-h"])
     try:
         print(deploy.service(a.sub, env_file=getattr(a, "env_file", None), domain=getattr(a, "domain", "") or "",
-                             user_mode=getattr(a, "user", False), no_start=getattr(a, "no_start", False),
+                             email=getattr(a, "email", "") or "",
+                             admin_user=getattr(a, "admin_user", "") or "",
+                             admin_password=getattr(a, "admin_password", "") or "",
+                             prompt=not getattr(a, "no_prompt", False), user_mode=getattr(a, "user", False), no_start=getattr(a, "no_start", False),
                              port=getattr(a, "port", None)))
     except deploy.DeployError as e:
         die(str(e))
@@ -403,13 +406,16 @@ def cmd_nginx(a):
         if a.sub == "remove":
             return print(deploy.nginx_remove())
         s = Settings()
-        domain = a.domain or s.get("domain")
+        domain = a.domain if a.domain is not None else s.get("domain")      # empty = IP mode (no domain needed)
         port = a.port or int(s.get("port"))
         mb = a.max_upload_mb if a.max_upload_mb is not None else int(s.get("max_upload_mb"))
         if a.sub == "show":
-            return print(deploy.render_nginx(domain, port, mb, a.cert or "", a.key or ""))
-        print(deploy.nginx_install(domain, port, mb, certbot=a.certbot, email=a.email or "", cert=a.cert or "",
-                                   key=a.key or "", install_packages=a.install_packages, env_file=a.env_file))
+            return print(deploy.render_nginx(domain, port, mb, a.cert or "", a.key or "",
+                                             listen_port=a.listen_port or 0, https_port=a.https_port or 0))
+        print(deploy.nginx_install(domain, port, mb, certbot=a.certbot, email=a.email or s.get("email") or "", cert=a.cert or "",
+                                   key=a.key or "", install_packages=a.install_packages, env_file=a.env_file,
+                                   listen_port=a.listen_port or 0, https_port=a.https_port or 0,
+                                   self_signed=a.self_signed, ip=a.ip or ""))
     except deploy.DeployError as e:
         die(str(e))
 
@@ -564,7 +570,7 @@ def build_parser() -> argparse.ArgumentParser:
          "largest top-level folders of the storage folder. Runs on the server machine.",
          ["synclayer server usage"])
     x = _add(ss, "set", "change one setting live",
-             "Change a setting without restarting. Editable live: domain, storage_root, mounts,\n"
+             "Change a setting without restarting. Editable live: domain, email, storage_root, mounts,\n"
              "admin_user, max_upload_mb, session_hours, read_only, lockdown, and the disk-space\n"
              "controls: quota_mb (cap for the cloud, 0 = unlimited), min_free_mb (keep this much of\n"
              "the disk free), blocked_extensions (e.g. .exe,.php) and user_writes (false = only the\n"
@@ -774,11 +780,19 @@ def build_parser() -> argparse.ArgumentParser:
         if install:
             x.add_argument("--env-file", metavar="PATH", help="settings file to use (default: ./.env if present)")
             x.add_argument("--domain", metavar="HOST", help="public domain to record in the settings (Linux)")
+            x.add_argument("--email", metavar="ADDR", help="contact address for HTTPS certificates, saved as SL_EMAIL (Linux)")
+            x.add_argument("--admin-user", metavar="NAME", dest="admin_user",
+                           help="admin username for a new install (asked if omitted and none is set; env SL_ADMIN_USER)")
+            x.add_argument("--admin-password", metavar="PW", dest="admin_password",
+                           help="admin password, min 10 chars (prefer the prompt or env SL_ADMIN_PASSWORD: arguments show in `ps`)")
+            x.add_argument("--no-prompt", action="store_true", dest="no_prompt",
+                           help="never ask questions; without a login a password is generated at first start")
             x.add_argument("--port", type=int, metavar="N", help="Windows service port (default: SL_PORT or 8787)")
             x.add_argument("--no-start", action="store_true", help="register the service but do not start it now")
         return x
     _svc("install", "install and start the service",
          "Create the service, its data folders and settings file, enable it at boot and start it.\n"
+         "On a new install with no admin login yet it asks for a username and password (Enter = generate one).\n"
          "Safe to re-run: it updates the service and keeps your settings and files.",
          ["sudo synclayer service install", "sudo synclayer service install --env-file /srv/synclayer/.env",
           "synclayer service install --port 8788  (Windows: choose another listening port)"], install=True)
@@ -796,23 +810,35 @@ def build_parser() -> argparse.ArgumentParser:
         "Generate or install an nginx site that proxies your domain to the Synclayer server, with\n"
         "WebSocket support, streaming uploads/downloads and no body-size cap. With --certbot it also gets\n"
         "a Let's Encrypt certificate and redirects HTTP to HTTPS. Targets Ubuntu/Debian; needs root.\n"
-        "Point your domain's DNS at this machine first and open ports 80 and 443.",
+        "Point your domain's DNS at this machine first and open ports 80 and 443.\n"
+        "No domain? Run it without --domain: nginx then answers on the server's IP (http://IP/ or --listen-port N),\n"
+        "and --self-signed adds HTTPS with a self-made certificate.",
         ["synclayer nginx show --domain files.example.com",
+         "sudo synclayer nginx install --install-packages                    (IP only, http://SERVER-IP/)",
+         "sudo synclayer nginx install --listen-port 8080 --self-signed      (IP only, https://SERVER-IP:443/)",
          "sudo synclayer nginx install --domain files.example.com --certbot --email you@example.com",
          "sudo synclayer nginx remove"])
     s.set_defaults(fn=cmd_nginx)
 
     def _ngx(name, help, desc, examples=(), install=False):
         x = _add(ss, name, help, desc, examples)
-        x.add_argument("--domain", metavar="HOST", help="your domain (default: the server's SL_DOMAIN setting)")
+        x.add_argument("--domain", metavar="HOST",
+                       help="your domain (default: the SL_DOMAIN setting). Leave empty for IP mode: http://SERVER-IP[:port]/")
         x.add_argument("--port", type=int, metavar="N", help="the Synclayer server port (default: SL_PORT, 8787)")
         x.add_argument("--max-upload-mb", type=int, metavar="MB", dest="max_upload_mb",
                        help="nginx request-size cap in MB, 0 = unlimited (default: the server's max_upload_mb)")
         x.add_argument("--cert", metavar="FILE", help="use this certificate file instead of certbot (needs --key)")
         x.add_argument("--key", metavar="FILE", help="private key file for --cert")
+        x.add_argument("--listen-port", type=int, metavar="N", dest="listen_port",
+                       help="public HTTP port nginx listens on (default 80; e.g. 8080 when 80 is taken)")
+        x.add_argument("--https-port", type=int, metavar="N", dest="https_port",
+                       help="public HTTPS port when a certificate is used (default 443)")
+        x.add_argument("--self-signed", action="store_true", dest="self_signed",
+                       help="no domain needed: create a self-signed certificate for the server IP and serve HTTPS")
+        x.add_argument("--ip", metavar="ADDR", help="address to use for --self-signed and the printed URL (default: detected)")
         if install:
             x.add_argument("--certbot", action="store_true", help="obtain and install a Let's Encrypt certificate")
-            x.add_argument("--email", metavar="ADDR", help="contact address for certbot (recommended)")
+            x.add_argument("--email", metavar="ADDR", help="contact address for certbot (default: the SL_EMAIL setting; saved there when given)")
             x.add_argument("--install-packages", action="store_true", dest="install_packages",
                            help="apt-get install nginx (and certbot) first")
             x.add_argument("--env-file", metavar="PATH",

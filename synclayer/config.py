@@ -27,6 +27,7 @@ SPECS: dict[str, tuple] = {
     "port": (8787, int),
     "trust_proxy": (False, bool),
     "domain": ("", str),
+    "email": ("", str),                   # contact address for HTTPS certificates (Let's Encrypt / certbot)
     "storage_root": ("", str),
     "mounts": ({}, dict),
     "admin_user": ("admin", str),
@@ -52,7 +53,7 @@ SPECS: dict[str, tuple] = {
 }
 SECRET_KEYS = {"sms_twilio_token", "sms_webhook_token", "smtp_password"}
 # Changeable at runtime through the admin API/GUI/CLI
-EDITABLE = {"domain", "storage_root", "mounts", "admin_user", "max_upload_mb",
+EDITABLE = {"domain", "email", "storage_root", "mounts", "admin_user", "max_upload_mb",
             "session_hours", "read_only", "lockdown", "quota_mb", "min_free_mb",
             "blocked_extensions", "user_writes", "user_quota_mb", "trash_days", "versions_keep", "sms_twilio_sid", "sms_twilio_token", "sms_twilio_from",
             "sms_webhook_url", "sms_webhook_token", "smtp_host", "smtp_port", "smtp_user", "smtp_password",
@@ -281,6 +282,10 @@ class Settings:
             raise ValueError("session_hours must be 1..720")
         elif k == "smtp_security" and v.lower() not in ("starttls", "ssl", "none"):
             raise ValueError("smtp_security must be starttls, ssl or none")
+        elif k == "email":
+            v = v.strip()
+            if v and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", v):
+                raise ValueError("email must look like name@example.com")
         elif k == "admin_user" and not v.strip():
             raise ValueError("admin_user cannot be empty")
         return v
