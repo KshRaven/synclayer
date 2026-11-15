@@ -4,7 +4,7 @@ plugins {
 }
 
 // Version comes from the Python package so every platform shares one number.
-def pyVersion = "0.1.0"
+def pyVersion = "0.1.1"
 def m = file("../../synclayer/_version.py").text =~ /__version__\s*=\s*"([^"]+)"/
 if (m.find()) pyVersion = m.group(1)
 def vparts = pyVersion.tokenize('.').collect { it.replaceAll(/\D.*/, '') ?: '0' }.collect { it as int }

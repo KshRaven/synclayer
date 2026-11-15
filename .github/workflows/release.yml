@@ -1,8 +1,10 @@
 name: Release
 
 # Runs when a version tag is pushed (or manually to build the apps only) (python scripts/pypimgr/pypimgr.py release --push does this for you).
-# It re-checks and builds, creates the GitHub release, then publishes to TestPyPI and PyPI
-# using configured Trusted Publishers (GitHub OIDC; no long-lived API tokens).
+# It re-checks and builds, then publishes to TestPyPI and PyPI using configured Trusted Publishers (GitHub OIDC).
+# Desktop/Android app builds and the GitHub release (with the apps attached) only happen when files that ship in the
+# apps changed since the previous tag (APP_PATHS in scripts/pypimgr/config.py), or when the tag was made with
+# `pypimgr release --apps`. Otherwise the version goes to PyPI (and the server image) only.
 
 on:
   push:
@@ -22,8 +24,41 @@ env:
 
 
 jobs:
+  plan:
+    name: Plan (apps changed?)
+    runs-on: ubuntu-latest
+    outputs:
+      apps: ${{ steps.p.outputs.apps }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: p
+        env:
+          PYPIMGR_NO_VENV: "1"
+        run: |
+          git fetch --tags --force
+          mode=""
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            apps=yes
+          else
+            mode="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME" | sed -n 's/^release-apps: *//p' | head -1)"
+            if [ "$mode" = "yes" ] || [ "$mode" = "no" ]; then
+              apps="$mode"
+            else
+              apps="$(python scripts/pypimgr/pypimgr.py apps-changed --head HEAD)"
+            fi
+          fi
+          echo "apps=$apps" >> "$GITHUB_OUTPUT"
+          echo "Desktop/Android apps + GitHub release: $apps"
+
   apps:
     name: Build apps (${{ matrix.os }})
+    needs: plan
+    if: ${{ needs.plan.outputs.apps == 'yes' }}
     continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       fail-fast: false
@@ -83,6 +118,8 @@ jobs:
 
   android:
     name: Build Android APK
+    needs: plan
+    if: ${{ needs.plan.outputs.apps == 'yes' }}
     runs-on: ubuntu-latest
     continue-on-error: true          # never blocks the desktop release
     steps:
@@ -126,13 +163,11 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
 
-  release:
-    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') && needs.apps.result != 'failure' }}
-    needs: [apps, android]
+  build:
+    name: Check and build distributions
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
       - run: |
@@ -156,8 +191,33 @@ jobs:
           PYPIMGR_NO_VENV: "1"
       - name: Release notes from CHANGELOG.md
         run: python scripts/pypimgr/pypimgr.py notes "${GITHUB_REF_NAME}" > notes.md
-      - name: Collect artifacts
-        run: mkdir -p dist && cp .cache/pypimgr/synclayer/artifacts/* dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: notes.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-dist
+          path: .cache/pypimgr/synclayer/artifacts/*
+          if-no-files-found: error
+
+  release:
+    name: GitHub release (with apps)
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') && needs.plan.outputs.apps == 'yes' && needs.build.result == 'success' && needs.apps.result != 'failure' }}
+    needs: [plan, build, apps, android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-dist
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: notes
       - uses: actions/download-artifact@v4
         with:
           pattern: apps-*
@@ -173,16 +233,12 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          body_path: notes.md
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-dist
-          path: .cache/pypimgr/synclayer/artifacts/*
-          if-no-files-found: error
+          body_path: notes/notes.md
 
   publish-testpypi:
     name: Publish to TestPyPI
-    needs: release
+    needs: [build, release]
+    if: ${{ always() && needs.build.result == 'success' && needs.release.result != 'failure' && needs.release.result != 'cancelled' }}
     runs-on: ubuntu-latest
     environment:
       name: testpypi
@@ -221,7 +277,8 @@ jobs:
 
   publish:
     name: Publish to PyPI
-    needs: [release, publish-testpypi]
+    needs: [build, release, publish-testpypi]
+    if: ${{ always() && needs.build.result == 'success' && needs.publish-testpypi.result == 'success' && needs.release.result != 'failure' && needs.release.result != 'cancelled' }}
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -258,11 +315,11 @@ jobs:
 
   docker:
     name: Server image
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') && needs.build.result == 'success' && needs.release.result != 'failure' && needs.release.result != 'cancelled' }}
     permissions:
       contents: read
       packages: write
-    needs: [release]
+    needs: [build, release]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -278,6 +335,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: latest=false
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest

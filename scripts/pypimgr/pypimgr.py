@@ -450,6 +450,45 @@ def git(*args, check=False) -> subprocess.CompletedProcess:
     return p
 
 
+def apps_changed(head: str | None = None, fix_tag: str | None = None) -> tuple[bool, str, list[str]]:
+    """Did anything that ships in the desktop/Android apps change since the previous release tag?
+    head=None: before releasing (last tag vs your working tree). head="HEAD": in CI (previous tag vs the tagged commit).
+    Returns (changed, base_tag, changed_app_files); no earlier tag counts as changed."""
+    probe = f"{fix_tag}^" if fix_tag else f"{head}^" if head else "HEAD"  # a fix compares with the tag before the one it rewrites
+    base = git("describe", "--tags", "--abbrev=0", "--match", f"{project_config.TAG_PREFIX}*", probe).stdout.strip()
+    if not base:
+        return True, "", []
+    if head:
+        files = git("diff", "--name-only", base, head).stdout.split()
+    else:
+        files = git("diff", "--name-only", base).stdout.split() + git("ls-files", "--others", "--exclude-standard").stdout.split()
+    pre = tuple(x if x.endswith("/") else x + "/" for x in project_config.APP_PATHS)
+    exact = {x for x in project_config.APP_PATHS if not x.endswith("/")}
+    hits = sorted({f for f in files if f in exact or f.startswith(pre)})
+    # A file that only repeats the version number (VERSION_TARGETS) changes on every release; that alone is not an app change.
+    for rel, rx in getattr(project_config, "VERSION_TARGETS", ()):
+        if rel in hits:
+            old = git("show", f"{base}:{rel}").stdout
+            new = git("show", f"{head}:{rel}").stdout if head else _raw(ROOT / rel)
+            norm = lambda s: re.sub(rx, lambda m: m.group(1) + "@" + m.group(3), s.replace("\r\n", "\n"), flags=re.M)  # noqa: E731
+            if norm(old) == norm(new):
+                hits.remove(rel)
+    return bool(hits), base, hits
+
+
+def cmd_apps_changed(a) -> int:
+    changed, base, hits = apps_changed(a.head)
+    print("yes" if changed else "no")
+    sys.stderr.write((f"{len(hits)} app file(s) changed since {base}: " + ", ".join(hits[:8]) + ("..." if len(hits) > 8 else "")
+                      if hits else f"no app files changed since {base or 'the start'}" if not changed else "no earlier release tag") + "\n")
+    return 0
+
+
+def tag_message(tag: str, a) -> str:
+    """Tag annotation; carries an explicit --apps / --no-apps choice for the release workflow."""
+    return tag if a.apps is None else f"{tag}\n\nrelease-apps: {'yes' if a.apps else 'no'}"
+
+
 def is_repo() -> bool:
     return shutil.which("git") is not None and git("rev-parse", "--is-inside-work-tree").returncode == 0
 
@@ -682,8 +721,8 @@ def fix_push_commands(fx: dict, branch: str) -> list[str]:
     cmds = [f"git push --force-with-lease=refs/heads/{branch}:{fx['old']} {remote} HEAD:refs/heads/{branch}"
             if fx["branch_pushed"] else f"git push {remote} HEAD"]
     if fx["tag_pushed"]:
-        cmds += ["gh release delete " + tag + " --yes", f"git push {remote} :refs/tags/{tag}"]
-    return cmds + [f"git push {remote} refs/tags/{tag}"]
+        cmds += ["gh release delete " + tag + " --yes"]
+    return cmds + [f"git push --force {remote} refs/tags/{tag}"]
 
 
 def push_fix(fx: dict) -> None:
@@ -702,12 +741,15 @@ def push_fix(fx: dict) -> None:
         push(f"--force-with-lease=refs/heads/{branch}:{fx['old']}", remote, f"HEAD:refs/heads/{branch}")
     else:
         push(remote, "HEAD")
-    if fx["tag_pushed"]:
-        if shutil.which("gh"):
-            r = subprocess.run(["gh", "release", "delete", tag, "--yes"], cwd=ROOT, capture_output=True, text=True)
-            info("deleted the old GitHub release" if r.returncode == 0 else "gh could not delete the old release (the workflow replaces it)")
-        push(remote, f":refs/tags/{tag}")
-    push(remote, f"refs/tags/{tag}")
+    if fx["tag_pushed"] and shutil.which("gh"):
+        r = subprocess.run(["gh", "release", "delete", tag, "--yes"], cwd=ROOT, capture_output=True, text=True)
+        info("deleted the old GitHub release" if r.returncode == 0 else "gh could not delete the old release (the workflow replaces it)")
+    # The tag is moved with one forced push, never deleted first, so the remote is never left without it.
+    p = git("push", "--force", remote, f"refs/tags/{tag}")
+    if p.returncode != 0:
+        raise Fail(f"the commit was rewritten but {tag} could not be updated on {remote} (the old tag is still there): "
+                   f"{(p.stderr or p.stdout).strip()}\nRetry with: git push --force {remote} refs/tags/{tag}\n"
+                   f"The original release is still saved as {fx['backup']}.")
     git("update-ref", "-d", fx["backup"])
 
 
@@ -949,6 +991,14 @@ def cmd_release(a) -> int:
     un, st = section("Unreleased"), section(new)
     if not ((un and un["body"]) or (st and st["body"])):
         info("no changelog notes; the release notes will state that none were provided")
+    if not test:
+        chg, base, hits = apps_changed(fix_tag=release_tag(new) if fix_release else None)
+        want = chg if a.apps is None else a.apps
+        why = ("forced" if a.apps is not None else
+               f"{len(hits)} app file(s) changed since {base}" if hits else "first release" if not base else
+               f"no app files changed since {base}")
+        info(("GitHub release WITH desktop + Android apps" if want else "PyPI-only release (no app builds, no GitHub release)")
+             + f"   [{why}]")
     changes = dirty()
     include_all = not a.version_files_only
     if changes and not test:
@@ -1019,9 +1069,9 @@ def cmd_release(a) -> int:
         raise
     try:
         if fix_release:
-            git("tag", "--force", "--annotate", release_tag(new), "-m", release_tag(new), check=True)
+            git("tag", "--force", "--annotate", release_tag(new), "-m", tag_message(release_tag(new), a), check=True)
         else:
-            git("tag", "--annotate", release_tag(new), "-m", release_tag(new), check=True)
+            git("tag", "--annotate", release_tag(new), "-m", tag_message(release_tag(new), a), check=True)
     except Fail:
         if fix_release:
             warn("the release commit was amended, but its local tag could not be updated")
@@ -1045,7 +1095,7 @@ def cmd_release(a) -> int:
             p = git("push", *refs)
             if p.returncode != 0:
                 raise Fail(f"git push {' '.join(refs)} failed: {(p.stderr or p.stdout).strip()}")
-        ok("pushed; the Release workflow will create the GitHub release")
+        ok("pushed; the Release workflow publishes to PyPI (and creates the GitHub release when apps changed)")
     elif fix_release:
         branch = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
         info("push when ready (or re-run with --push):")
@@ -1165,7 +1215,7 @@ def _tui_release(term):
             return
         test, push = t == 2, t == 1
     a = argparse.Namespace(bump=bump, test=test, push=push, version_files_only=False,
-                           skip_tests=False, dry=False, yes=False, message=None, message_file=None)
+                           skip_tests=False, dry=False, yes=False, message=None, message_file=None, apps=None)
     tui_run("Release", cmd_release, a)
 
 
@@ -1202,10 +1252,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--message-file", type=Path,
                    help=f"read the release commit or amend message from a file "
                         f"(default prompt file: {project_config.COMMIT_MESSAGE_FILE})")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--apps", dest="apps", action="store_const", const=True, default=None,
+                   help="force a GitHub release with desktop + Android apps even if no app files changed")
+    g.add_argument("--no-apps", dest="apps", action="store_const", const=False,
+                   help="force a PyPI-only release even if app files changed")
     p.add_argument("--skip-tests", action="store_true")
     p.add_argument("--dry", action="store_true", help="check and test only; change nothing")
     p = sub.add_parser("notes", help="print the changelog section of a version (used by CI)")
     p.add_argument("version")
+    p = sub.add_parser("apps-changed", help="print yes/no: did desktop/Android app files change since the last release (used by CI)")
+    p.add_argument("--head", help="commit to compare (CI passes HEAD); default: your working tree")
     sub.add_parser("publish", help="push the local release tag to start the release workflow")
     sub.add_parser("clean", help="remove artifacts, the build environment and build/ dist/")
     sub.add_parser("doctor", help="check Python, git, tools and local settings policy")
@@ -1215,7 +1272,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 ACTIONS = {"status": cmd_status, "check": cmd_check, "test": cmd_test, "build": cmd_build, "verify": cmd_verify,
            "contents": cmd_contents, "bump": cmd_bump, "release": cmd_release, "notes": cmd_notes,
-           "publish": cmd_publish,
+           "publish": cmd_publish, "apps-changed": cmd_apps_changed,
            "clean": cmd_clean, "doctor": cmd_doctor, "logs": cmd_logs}
 
 

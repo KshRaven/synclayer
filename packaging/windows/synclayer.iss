@@ -1,4 +1,4 @@
-; Synclayer Windows installer (Inno Setup 6). Build: iscc /DAppVersion=0.1.0 packaging\windows\synclayer.iss
+; Synclayer Windows installer (Inno Setup 6). Build: iscc /DAppVersion=0.1.1 packaging\windows\synclayer.iss
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
