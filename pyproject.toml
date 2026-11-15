@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synclayer"
+dynamic = ["version"]
+description = "Synclayer - self-hosted cloud file manager with cross-platform sync (server, web, desktop, CLI)"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Bradley Odimmasi" }]
+requires-python = ">=3.10"
+keywords = ["file manager", "sync", "cloud storage", "self-hosted", "backup"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Archiving :: Backup",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Typing :: Typed",
+]
+dependencies = [
+  "fastapi>=0.115",
+  "pillow>=10.0",
+  "uvicorn[standard]>=0.27",
+  "httpx>=0.26",
+  "platformdirs>=4.0",
+  "python-dotenv>=1.0",
+  "websockets>=12",
+  "watchdog>=4.0",
+]
+
+# What you get from each install:
+#   pip install synclayer            server + command line (synclayer / sl) + the Python package   <- servers,
+#                                  new systems, scripts; no Qt is installed
+#   pip install "synclayer[gui]"     + the desktop app (synclayer-gui) with its launcher, icon and tray
+#   pip install "synclayer[winservice]"  + Windows Service support for the server (Windows only)
+#   pip install -e ".[build]"      + everything to build the apps/package (PySide6, PyInstaller, build, twine)
+#   pip install -e ".[dev]"        + [build] + pytest and ruff.  Android: `synclayer dev android` fetches JDK/SDK/Gradle
+[project.optional-dependencies]
+gui = ["PySide6>=6.6"]
+winservice = ["pywin32>=306; sys_platform == 'win32'"]
+# build: everything needed to build every app headless (desktop app needs PySide6; Android: `synclayer dev android`)
+build = ["synclayer[gui]", "pyinstaller>=6.3", "build>=1.0", "twine>=5.0"]
+# dev: build + tests + lint
+dev = ["synclayer[build]", "pytest>=8", "ruff"]
+
+[project.scripts]
+synclayer = "synclayer.cli:main"
+sl = "synclayer.cli:main"
+
+[project.gui-scripts]
+synclayer-gui = "synclayer.gui:main"
+
+[project.urls]
+Homepage = "https://github.com/KshRaven/synclayer"
+Documentation = "https://github.com/KshRaven/synclayer#readme"
+Source = "https://github.com/KshRaven/synclayer"
+Issues = "https://github.com/KshRaven/synclayer/issues"
+Changelog = "https://github.com/KshRaven/synclayer/blob/main/CHANGELOG.md"
+
+[tool.setuptools.dynamic]
+version = { attr = "synclayer._version.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["synclayer*"]
+
+[tool.setuptools.package-data]
+synclayer = ["py.typed", "server/web/*", "_build_defaults.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
+ignore = []
